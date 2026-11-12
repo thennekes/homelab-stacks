@@ -7,6 +7,8 @@ services:
     image: postgres:17
     container_name: postgres # fester Name, damit das Backup-Cron (docker exec postgres ...) passt
     restart: unless-stopped
+    labels:
+      backup.pgdump: "true"
     environment:
       POSTGRES_USER: n8n
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -25,7 +27,7 @@ services:
     container_name: n8n
     restart: unless-stopped
     ports:
-      - "127.0.0.1:5678:5678" # nur im Heimnetz bzw. über Tailscale erreichbar, nicht öffentlich
+      - 127.0.0.1:5678:5678 # nur im Heimnetz bzw. über Tailscale erreichbar, nicht öffentlich
     environment:
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: postgres
@@ -39,7 +41,7 @@ services:
       N8N_SECURE_COOKIE: "true"
       N8N_PROXY_HOPS: 1
       N8N_EDITOR_BASE_URL: https://docker.tail810952.ts.net/
-      WEBHOOK_URL: https://docker.tail810952.ts.net/ 
+      WEBHOOK_URL: https://docker.tail810952.ts.net/
       EXECUTIONS_DATA_PRUNE: "true" # alte Ausführungen automatisch löschen
       EXECUTIONS_DATA_MAX_AGE: 336 # Stunden, also 14 Tage
     volumes:
