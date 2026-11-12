@@ -7,13 +7,12 @@
 #
 # Image-Tags stehen hier, nicht in der .env. Beim Update beide Tags gemeinsam aendern.
 
-x-logging: &logging
+x-logging: &a1
   driver: json-file
   options:
-    max-size: "10m"
+    max-size: 10m
     max-file: "3"
-
-x-app-env: &app-env
+x-app-env: &a2
   TZ: Europe/Berlin
   FLEXMKT_DATABASE_URL: postgresql+asyncpg://${DB_USER:?}:${DB_PASSWORD:?}@db:5432/${DB_NAME:?}
   FLEXMKT_DATABASE_DSN_SYNC: postgresql://${DB_USER:?}:${DB_PASSWORD:?}@db:5432/${DB_NAME:?}
@@ -42,48 +41,52 @@ x-app-env: &app-env
   FLEXMKT_ORG__COMMERCIAL_REGISTER: Amtsgericht Marburg HRB 3889
   FLEXMKT_ORG__IMPRINT_URL: https://www.fingerhaus.de/impressum/
   FLEXMKT_ORG__PRIVACY_URL: https://www.fingerhaus.de/datenschutz/
-
 services:
-  # Web-Oberflaeche (Caddy, non-root) und einziger Eingang: proxyt /graphql, /api usw. zur API
   flexmarketing:
-    image: ghcr.io/thennekes/flexmkt-web:1.0.0
+    image: ghcr.io/thennekes/flexmkt-web:1.1.0
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8101:8080"
+      - 127.0.0.1:8101:8080
     environment:
       TZ: Europe/Berlin
     depends_on:
       api:
         condition: service_healthy
     mem_limit: 128m
-    logging: *logging
-    # Healthcheck kommt aus dem Image (GET /healthz)
-
+    logging: *a1
   api:
-    image: ghcr.io/thennekes/flexmkt-api:1.0.0
+    image: ghcr.io/thennekes/flexmkt-api:1.1.0
     restart: unless-stopped
-    environment: *app-env
+    environment: *a2
     volumes:
       - files:/var/lib/flexmkt/files
     depends_on:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      # 200 erst, wenn die Datenbank erreichbar und das Schema aktuell ist
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8000/health/ready',
+          timeout=3)
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 30s
     mem_limit: 448m
-    logging: *logging
-
+    logging: *a1
   worker:
-    image: ghcr.io/thennekes/flexmkt-api:1.0.0
+    image: ghcr.io/thennekes/flexmkt-api:1.1.0
     restart: unless-stopped
-    command: ["procrastinate", "--app=flexmkt.worker.app", "worker",
-              "--queues=schema,imports,prepare,events,gdpr,send,journey", "--concurrency=4"]
-    environment: *app-env
+    command:
+      - procrastinate
+      - --app=flexmkt.worker.app
+      - worker
+      - --queues=schema,imports,prepare,events,gdpr,send,journey
+      - --concurrency=4
+    environment: *a2
     volumes:
       - files:/var/lib/flexmkt/files
     depends_on:
@@ -91,21 +94,25 @@ services:
         condition: service_completed_successfully
     stop_grace_period: 60s
     healthcheck:
-      test: ["CMD", "procrastinate", "--app=flexmkt.worker.app", "healthchecks"]
+      test:
+        - CMD
+        - procrastinate
+        - --app=flexmkt.worker.app
+        - healthchecks
       interval: 60s
       timeout: 10s
       retries: 3
       start_period: 30s
     mem_limit: 448m
-    logging: *logging
-
-  # Laeuft bei jedem Deploy einmal (Datenbank-Migration) und beendet sich dann.
-  # "exited (0)" in Dockge ist hier richtig. Der Demo-Seed laeuft ueber diesen Dienst.
+    logging: *a1
   migrate:
-    image: ghcr.io/thennekes/flexmkt-api:1.0.0
-    restart: "no"
-    command: ["python", "-m", "flexmkt.scripts.migrate"]
-    environment: *app-env
+    image: ghcr.io/thennekes/flexmkt-api:1.1.0
+    restart: no
+    command:
+      - python
+      - -m
+      - flexmkt.scripts.migrate
+    environment: *a2
     volumes:
       - files:/var/lib/flexmkt/files
     depends_on:
@@ -114,9 +121,7 @@ services:
     healthcheck:
       disable: true
     mem_limit: 512m
-    logging: *logging
-
-  # Postgres 18 (uuidv7), abgestimmt. Datenpfad des 18er-Images: /var/lib/postgresql
+    logging: *a1
   db:
     image: postgres:18-bookworm
     restart: unless-stopped
@@ -127,7 +132,8 @@ services:
       POSTGRES_USER: ${DB_USER:?}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?}
       POSTGRES_DB: ${DB_NAME:?}
-      POSTGRES_INITDB_ARGS: "--data-checksums --encoding=UTF8 --locale-provider=icu --icu-locale=de-DE --locale=C.UTF-8"
+      POSTGRES_INITDB_ARGS: --data-checksums --encoding=UTF8 --locale-provider=icu
+        --icu-locale=de-DE --locale=C.UTF-8
     command:
       - postgres
       - -c
@@ -152,43 +158,44 @@ services:
       - db_data:/var/lib/postgresql
     shm_size: 256mb
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      test:
+        - CMD-SHELL
+        - pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 30s
     mem_limit: 768m
-    logging: *logging
-
-  # Demo-Postfach: faengt alle Mails ab. Weboberflaeche mit Basic Auth (Nutzer "demo").
+    logging: *a1
   mailpit:
     image: axllent/mailpit:v1.31.3
     restart: unless-stopped
-    user: "65534:65534"
+    user: 65534:65534
     ports:
-      - "127.0.0.1:8102:8025"
+      - 127.0.0.1:8102:8025
     environment:
       TZ: Europe/Berlin
       MP_MAX_MESSAGES: 2000
       MP_UI_AUTH: demo:${MAILPIT_UI_PASSWORD:?}
     mem_limit: 96m
-    logging: *logging
-
-  # Nur mit Tunnel (COMPOSE_PROFILES=tunnel in der .env), Einrichtung: DEPLOY.md, Abschnitt B
+    logging: *a1
   cloudflared:
     image: cloudflare/cloudflared:2026.9.2
-    profiles: ["tunnel"]
+    profiles:
+      - tunnel
     restart: unless-stopped
-    command: ["tunnel", "--no-autoupdate", "run"]
+    command:
+      - tunnel
+      - --no-autoupdate
+      - run
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
     depends_on:
       flexmarketing:
         condition: service_healthy
     mem_limit: 128m
-    logging: *logging
-
+    logging: *a1
 volumes:
-  db_data:
-  # Uploads und Bilder der E-Mails, geteilt von API, Worker und Seed
-  files:
+  db_data: null # Uploads und Bilder der E-Mails, geteilt von API, Worker und Seed
+  files: null
+networks: {}
