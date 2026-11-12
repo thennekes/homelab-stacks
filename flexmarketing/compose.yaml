@@ -1,0 +1,194 @@
+# /opt/stacks/flexmarketing/compose.yaml
+# flexMarketing, FingerHaus-Pitch-Demo im Homelab. Anleitung: deploy/DEPLOY.md im App-Repo.
+#
+# Eingang:  flexmarketing (Web)  127.0.0.1:8101 -> https://docker.tail810952.ts.net:8444
+# Postfach: mailpit (Demo-Mails) 127.0.0.1:8102 -> https://docker.tail810952.ts.net:8445
+# Oeffentlich (optional): Dienst cloudflared, aktiv mit COMPOSE_PROFILES=tunnel in der .env.
+#
+# Image-Tags stehen hier, nicht in der .env. Beim Update beide Tags gemeinsam aendern.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-app-env: &app-env
+  TZ: Europe/Berlin
+  FLEXMKT_DATABASE_URL: postgresql+asyncpg://${DB_USER:?}:${DB_PASSWORD:?}@db:5432/${DB_NAME:?}
+  FLEXMKT_DATABASE_DSN_SYNC: postgresql://${DB_USER:?}:${DB_PASSWORD:?}@db:5432/${DB_NAME:?}
+  FLEXMKT_AUTH__SESSION_SECRET: ${FLEXMKT_SESSION_SECRET:?}
+  FLEXMKT_AUTH__TOKEN_SECRET: ${FLEXMKT_TOKEN_SECRET:?}
+  # HMAC der Adressen in Einwilligungsnachweisen: nie wechseln, sonst passen alte Nachweise nicht
+  FLEXMKT_CONSENT_PEPPER: ${FLEXMKT_CONSENT_PEPPER:?}
+  FLEXMKT_TRACKING__KEYS: '{"1": "${FLEXMKT_TRACKING_KEY:?}"}'
+  FLEXMKT_WEBHOOKS__MASTER_KEY: ${FLEXMKT_WEBHOOK_KEY:?}
+  # staging = Prod-Verhalten: Secure-Cookie, kein Dev-Token, kein GraphiQL
+  FLEXMKT_ENV: staging
+  FLEXMKT_LOG_FORMAT: json
+  # Adresse, unter der die Oberflaeche aufgerufen wird (CSRF-Pruefung, Links in Mails).
+  # Genau eine: Tailscale ODER Tunnel, siehe DEPLOY.md.
+  FLEXMKT_PUBLIC_URL: ${FLEXMKT_PUBLIC_URL:?}
+  # Versand nur ins Demo-Postfach (Mailpit)
+  FLEXMKT_MAIL__SMTP_HOST: mailpit
+  FLEXMKT_MAIL__FROM_ADDRESS: news@fingerhaus-demo.example
+  FLEXMKT_MAIL__FROM_NAME: FingerHaus (Demo)
+  FLEXMKT_MAIL__MESSAGE_ID_DOMAIN: fingerhaus-demo.example
+  FLEXMKT_MAIL__RATE_PER_S: "10"
+  # Impressum laut fingerhaus.de (Demo mit Erlaubnis der Kundin)
+  FLEXMKT_ORG__COMPANY: FingerHaus GmbH
+  FLEXMKT_ORG__ADDRESS: Auestraße 45, 35066 Frankenberg (Eder)
+  FLEXMKT_ORG__PHONE: 06451 504-0
+  FLEXMKT_ORG__COMMERCIAL_REGISTER: Amtsgericht Marburg HRB 3889
+  FLEXMKT_ORG__IMPRINT_URL: https://www.fingerhaus.de/impressum/
+  FLEXMKT_ORG__PRIVACY_URL: https://www.fingerhaus.de/datenschutz/
+
+services:
+  # Web-Oberflaeche (Caddy, non-root) und einziger Eingang: proxyt /graphql, /api usw. zur API
+  flexmarketing:
+    image: ghcr.io/thennekes/flexmkt-web:1.0.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8101:8080"
+    environment:
+      TZ: Europe/Berlin
+    depends_on:
+      api:
+        condition: service_healthy
+    mem_limit: 128m
+    logging: *logging
+    # Healthcheck kommt aus dem Image (GET /healthz)
+
+  api:
+    image: ghcr.io/thennekes/flexmkt-api:1.0.0
+    restart: unless-stopped
+    environment: *app-env
+    volumes:
+      - files:/var/lib/flexmkt/files
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # 200 erst, wenn die Datenbank erreichbar und das Schema aktuell ist
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    mem_limit: 448m
+    logging: *logging
+
+  worker:
+    image: ghcr.io/thennekes/flexmkt-api:1.0.0
+    restart: unless-stopped
+    command: ["procrastinate", "--app=flexmkt.worker.app", "worker",
+              "--queues=schema,imports,prepare,events,gdpr,send,journey", "--concurrency=4"]
+    environment: *app-env
+    volumes:
+      - files:/var/lib/flexmkt/files
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD", "procrastinate", "--app=flexmkt.worker.app", "healthchecks"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    mem_limit: 448m
+    logging: *logging
+
+  # Laeuft bei jedem Deploy einmal (Datenbank-Migration) und beendet sich dann.
+  # "exited (0)" in Dockge ist hier richtig. Der Demo-Seed laeuft ueber diesen Dienst.
+  migrate:
+    image: ghcr.io/thennekes/flexmkt-api:1.0.0
+    restart: "no"
+    command: ["python", "-m", "flexmkt.scripts.migrate"]
+    environment: *app-env
+    volumes:
+      - files:/var/lib/flexmkt/files
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    mem_limit: 512m
+    logging: *logging
+
+  # Postgres 18 (uuidv7), abgestimmt. Datenpfad des 18er-Images: /var/lib/postgresql
+  db:
+    image: postgres:18-bookworm
+    restart: unless-stopped
+    labels:
+      backup.pgdump: "true"
+    environment:
+      TZ: Europe/Berlin
+      POSTGRES_USER: ${DB_USER:?}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?}
+      POSTGRES_DB: ${DB_NAME:?}
+      POSTGRES_INITDB_ARGS: "--data-checksums --encoding=UTF8 --locale-provider=icu --icu-locale=de-DE --locale=C.UTF-8"
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=768MB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=96MB
+      - -c
+      - max_connections=40
+      - -c
+      - max_locks_per_transaction=4096
+      - -c
+      - max_wal_size=1GB
+      - -c
+      - wal_compression=on
+      - -c
+      - max_parallel_workers_per_gather=1
+    volumes:
+      - db_data:/var/lib/postgresql
+    shm_size: 256mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    mem_limit: 768m
+    logging: *logging
+
+  # Demo-Postfach: faengt alle Mails ab. Weboberflaeche mit Basic Auth (Nutzer "demo").
+  mailpit:
+    image: axllent/mailpit:v1.31.3
+    restart: unless-stopped
+    user: "65534:65534"
+    ports:
+      - "127.0.0.1:8102:8025"
+    environment:
+      TZ: Europe/Berlin
+      MP_MAX_MESSAGES: 2000
+      MP_UI_AUTH: demo:${MAILPIT_UI_PASSWORD:?}
+    mem_limit: 96m
+    logging: *logging
+
+  # Nur mit Tunnel (COMPOSE_PROFILES=tunnel in der .env), Einrichtung: DEPLOY.md, Abschnitt B
+  cloudflared:
+    image: cloudflare/cloudflared:2026.9.2
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      flexmarketing:
+        condition: service_healthy
+    mem_limit: 128m
+    logging: *logging
+
+volumes:
+  db_data:
+  # Uploads und Bilder der E-Mails, geteilt von API, Worker und Seed
+  files:
