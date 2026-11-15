@@ -1,0 +1,64 @@
+# /opt/stacks/prost/compose.yaml
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  prost:
+    image: ghcr.io/thennekes/prost:1.0.0
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8103:8000"
+    environment:
+      TZ: Europe/Berlin
+      # Nach Einrichtung des Cloudflare Tunnels auf https://prost.<deine-domain> ändern (DEPLOY.md, Teil B).
+      APP_BASE_URL: https://docker.tail810952.ts.net:8446
+      DATABASE_URL: postgres://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
+      APP_SECRET: ${APP_SECRET}
+      WATER_EVERY: "3"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: *logging
+
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    labels:
+      backup.pgdump: "true"
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *logging
+
+  # Öffentlicher Zugang. Startet nur, wenn in der .env COMPOSE_PROFILES=tunnel steht (DEPLOY.md, Teil B).
+  cloudflared:
+    image: cloudflare/cloudflared:2026.10.7
+    restart: unless-stopped
+    profiles: ["tunnel"]
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      prost:
+        condition: service_healthy
+    logging: *logging
+
+volumes:
+  db_data:
