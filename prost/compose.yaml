@@ -6,7 +6,7 @@ x-logging: &a1
     max-file: "3"
 services:
   prost:
-    image: ghcr.io/thennekes/prost:1.0.0
+    image: ghcr.io/thennekes/prost:1.2.0
     restart: unless-stopped
     ports:
       - 127.0.0.1:8103:8000
