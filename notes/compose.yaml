@@ -1,0 +1,95 @@
+# /opt/stacks/notes/compose.yaml
+# Gesprächsarchiv für Pocket-Aufnahmen. Anleitung: deploy/DEPLOY.md im App-Repo.
+#
+# Eingang: notes (Web, MCP)  127.0.0.1:8104 -> https://docker.tail810952.ts.net:8447
+x-logging: &a2
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+x-app-env: &a1
+  TZ: Europe/Berlin
+  APP_BASE_URL: https://docker.tail810952.ts.net:8447
+  DATABASE_URL: postgres://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
+  APP_SECRET: ${APP_SECRET}
+  MCP_TOKEN: ${MCP_TOKEN}
+  POCKET_API_KEY: ${POCKET_API_KEY:-}
+  POCKET_SINCE: ${POCKET_SINCE:-}
+  POCKET_SKIP_TAG: ${POCKET_SKIP_TAG:-}
+  POLL_INTERVAL: ${POLL_INTERVAL:-300}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-opus-5-5}
+  CLAUDE_EFFORT: ${CLAUDE_EFFORT:-medium}
+  MS_TENANT_ID: ${MS_TENANT_ID:-}
+  MS_CLIENT_ID: ${MS_CLIENT_ID:-}
+  MS_CLIENT_SECRET: ${MS_CLIENT_SECRET:-}
+  OWNER_NAME: ${OWNER_NAME:-}
+  OWNER_EMAIL: ${OWNER_EMAIL:-}
+  RETENTION_DAYS: ${RETENTION_DAYS:-}
+services:
+  notes:
+    image: ghcr.io/thennekes/notes:1.0.0
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:8104:8000
+    environment: *a1
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4)
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging: *a2
+  notes-worker:
+    image: ghcr.io/thennekes/notes:1.0.0
+    restart: unless-stopped
+    command:
+      - python
+      - -m
+      - app.worker
+    environment: *a1
+    depends_on:
+      notes:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -m
+        - app.cli
+        - worker-health
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging: *a2
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    labels:
+      backup.pgdump: "true"
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *a2
+volumes:
+  db_data: null
+networks: {}
