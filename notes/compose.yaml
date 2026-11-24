@@ -2,12 +2,13 @@
 # Gesprächsarchiv für Pocket-Aufnahmen. Anleitung: deploy/DEPLOY.md im App-Repo.
 #
 # Eingang: notes (Web, MCP)  127.0.0.1:8104 -> https://docker.tail810952.ts.net:8447
-x-logging: &a2
+x-logging: &logging
   driver: json-file
   options:
-    max-size: 10m
+    max-size: "10m"
     max-file: "3"
-x-app-env: &a1
+
+x-app-env: &app-env
   TZ: Europe/Berlin
   APP_BASE_URL: https://docker.tail810952.ts.net:8447
   DATABASE_URL: postgres://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
@@ -26,51 +27,49 @@ x-app-env: &a1
   OWNER_NAME: ${OWNER_NAME:-}
   OWNER_EMAIL: ${OWNER_EMAIL:-}
   RETENTION_DAYS: ${RETENTION_DAYS:-}
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-25}
+  POCKET_MEMO_TAG: ${POCKET_MEMO_TAG:-memo}
+  MEMO_MAX_MINUTES: ${MEMO_MAX_MINUTES:-15}
+
 services:
   notes:
-    image: ghcr.io/thennekes/notes:1.2.0
+    image: ghcr.io/thennekes/notes:1.3.0
     restart: unless-stopped
     ports:
-      - 127.0.0.1:8104:8000
-    environment: *a1
+      - "127.0.0.1:8104:8000"
+    environment: *app-env
+    volumes:
+      - files_data:/data/files
     depends_on:
       db:
         condition: service_healthy
     healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - import urllib.request;
-          urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4)
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4)"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 30s
-    logging: *a2
+    logging: *logging
+
+  # Holt Aufnahmen ab, ordnet Termine zu, analysiert. Gleiches Image, startet erst nach der Migration.
   notes-worker:
-    image: ghcr.io/thennekes/notes:1.2.0
+    image: ghcr.io/thennekes/notes:1.3.0
     restart: unless-stopped
-    command:
-      - python
-      - -m
-      - app.worker
-    environment: *a1
+    command: ["python", "-m", "app.worker"]
+    environment: *app-env
+    volumes:
+      - files_data:/data/files   # räumt gelöschte Anhänge nach 14 Tagen weg
     depends_on:
       notes:
         condition: service_healthy
     healthcheck:
-      test:
-        - CMD
-        - python
-        - -m
-        - app.cli
-        - worker-health
+      test: ["CMD", "python", "-m", "app.cli", "worker-health"]
       interval: 60s
       timeout: 10s
       retries: 3
       start_period: 60s
-    logging: *a2
+    logging: *logging
+
   db:
     image: postgres:17
     restart: unless-stopped
@@ -83,13 +82,12 @@ services:
     volumes:
       - db_data:/var/lib/postgresql/data
     healthcheck:
-      test:
-        - CMD-SHELL
-        - pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
       timeout: 5s
       retries: 5
-    logging: *a2
+    logging: *logging
+
 volumes:
-  db_data: null
-networks: {}
+  db_data:
+  files_data:
