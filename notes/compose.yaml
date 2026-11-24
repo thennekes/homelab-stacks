@@ -31,7 +31,7 @@ x-app-env: &a1
   MEMO_MAX_MINUTES: ${MEMO_MAX_MINUTES:-15}
 services:
   notes:
-    image: ghcr.io/thennekes/notes:2.2.0
+    image: ghcr.io/thennekes/notes:2.2.1
     restart: unless-stopped
     ports:
       - 127.0.0.1:8104:8000
@@ -54,7 +54,7 @@ services:
       start_period: 30s
     logging: *a2
   notes-worker:
-    image: ghcr.io/thennekes/notes:2.2.0
+    image: ghcr.io/thennekes/notes:2.2.1
     restart: unless-stopped
     command:
       - python
